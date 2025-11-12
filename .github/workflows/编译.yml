@@ -18,12 +18,15 @@ jobs:
           sudo apt update
           sudo apt install -y qemu-user-static
 
-      - name: 通过 Docker Alpine ARM64 执行静态打包
+      - name: 通过 Docker Alpine ARM64 执行静态打包（修复版）
         run: |
           # 启动 Alpine ARM64 容器，挂载当前目录到 /app
           docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 alpine:3.18 sh -c "
-            # 安装依赖
-            apk add --no-cache python3 py3-pip py3-pyinstaller build-base zlib-dev openssl-dev musl-dev
+            # 关键修复1：修正包名（pyinstaller 而非 py3-pyinstaller）
+            # 关键修复2：先安装 python3 和 py3-pip，确保 pip3 可用
+            apk add --no-cache python3 py3-pip build-base zlib-dev openssl-dev musl-dev
+            # 关键修复3：用 pip3 安装 PyInstaller（Alpine 源无 py3-pyinstaller，直接用 pip 安装）
+            pip3 install pyinstaller
             # 安装项目依赖
             pip3 install -r requirements.txt
             # 执行静态打包
