@@ -65,7 +65,7 @@ jobs:
           path: dist/CloudflareSpeedTest-linux-arm64
 
   # ------------------------------
-  # 3. 构建 OpenWRT 兼容静态 ARM64（musl libc）
+  # 3. 构建 OpenWRT 兼容静态 ARM64（musl libc）- 修复版
   # ------------------------------
   build_openwrt_static_arm64:
     name: OpenWRT Static ARM64
@@ -78,9 +78,10 @@ jobs:
           sudo apt update
           sudo apt install -y qemu-user-static
 
-      - name: 在 Alpine ARM64 容器中静态打包
+      - name: 在 Alpine ARM64 容器中静态打包（修复 bash 问题）
         run: |
-          docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 alpine:3.18 bash -c "
+          # 关键修复：将 bash -c 改为 sh -c（Alpine 默认支持 sh）
+          docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 alpine:3.18 sh -c "
             # 安装系统依赖
             apk add --no-cache python3 py3-pip build-base zlib-dev openssl-dev musl-dev
             # 安装 Python 依赖
@@ -102,7 +103,7 @@ jobs:
   # ------------------------------
   build_macos_amd64:
     name: macOS amd64
-    runs-on: macos-12  # 使用 Intel 架构的 macOS  runner
+    runs-on: macos-12  # 使用 Intel 架构的 macOS runner
     steps:
       - uses: actions/checkout@v4
 
@@ -129,7 +130,7 @@ jobs:
   # ------------------------------
   build_macos_arm64:
     name: macOS arm64
-    runs-on: macos-14  # 使用 Apple Silicon 的 macOS  runner
+    runs-on: macos-14  # 使用 Apple Silicon 的 macOS runner
     steps:
       - uses: actions/checkout@v4
 
