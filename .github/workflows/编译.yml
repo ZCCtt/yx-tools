@@ -11,7 +11,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-13]
+        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
         arch: [amd64, arm64]
         exclude:
           - os: windows-latest
@@ -73,11 +73,11 @@ jobs:
             ## Cloudflare SpeedTest ${{ env.VERSION }} 发布
             
             ### 下载链接
-            - Windows amd64: [CloudflareSpeedTest-windows-amd64.exe](https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-windows-amd64.exe)
-            - Linux amd64: [CloudflareSpeedTest-linux-amd64](https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-linux-amd64)
-            - Linux arm64: [CloudflareSpeedTest-linux-arm64](https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-linux-arm64)
-            - macOS amd64: [CloudflareSpeedTest-macos-amd64](https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-macos-amd64)
-            - macOS arm64: [CloudflareSpeedTest-macos-arm64](https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-macos-arm64)
+            - Windows amd64: [CloudflareSpeedTest-windows-amd64.exe](https://github.com/ZCCtt/yx-tools/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-windows-amd64.exe)
+            - Linux amd64: [CloudflareSpeedTest-linux-amd64](https://github.com/ZCCtt/yx-tools/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-linux-amd64)
+            - Linux arm64: [CloudflareSpeedTest-linux-arm64](https://github.com/ZCCtt/yx-tools/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-linux-arm64)
+            - macOS amd64: [CloudflareSpeedTest-macos-amd64](https://github.com/ZCCtt/yx-tools/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-macos-amd64)
+            - macOS arm64: [CloudflareSpeedTest-macos-arm64](https://github.com/ZCCtt/yx-tools/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-macos-arm64)
             
             ### 使用说明
             1. 下载对应平台的可执行文件
