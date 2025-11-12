@@ -10,6 +10,7 @@ jobs:
   build:
     name: Build ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
+    # 关键：不指定容器，在宿主环境中通过 QEMU + 多架构镜像编译 ARM64
     container: ${{ matrix.container }}
     permissions:
       contents: read
@@ -32,12 +33,12 @@ jobs:
             ext: ''
             container: ''
 
-          # Linux ARM64 (musl) - 真正的 ARM64 编译！
+          # Linux ARM64 (musl) - 使用多架构 Alpine 镜像 + QEMU
           - os: ubuntu-latest
             platform: linux
             arch: arm64-musl
             ext: ''
-            container: arm64v8/alpine:latest  # 关键：使用 ARM64 Alpine 镜像
+            container: ''  # 不在顶层指定容器，在步骤中手动启动 ARM64 容器
 
           # macOS Intel
           - os: macos-13
@@ -57,39 +58,50 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # Alpine ARM64 专属：虚拟环境编译
-      - name: 安装 Alpine ARM64 依赖并构建
+      # Linux ARM64 (musl) 专属：通过 QEMU 启动 ARM64 Alpine 容器编译
+      - name: 构建 Linux ARM64-musl 版本（多架构兼容）
         if: matrix.arch == 'arm64-musl'
         run: |
-          # 安装系统依赖
-          apk update
-          apk add --no-cache python3 py3-pip build-base libffi-dev openssl-dev
+          # 1. 安装 QEMU 和多架构支持（GitHub Actions Ubuntu 宿主已预装）
+          # 2. 拉取支持多架构的 Alpine 镜像（官方 alpine:latest 支持 x86_64/arm64）
+          docker pull alpine:latest
 
-          # 创建虚拟环境（避开系统 Python 保护）
-          python3 -m venv build_env
-          source build_env/bin/activate
+          # 3. 在 ARM64 容器中执行编译脚本（通过 --platform 指定架构）
+          docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 alpine:latest sh -c "
+            # 安装系统依赖
+            apk update
+            apk add --no-cache python3 py3-pip build-base libffi-dev openssl-dev
 
-          # 安装 Python 依赖和 PyInstaller
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller certifi urllib3
+            # 创建虚拟环境
+            python3 -m venv build_env
+            source build_env/bin/activate
 
-          # 构建静态链接的可执行文件
-          python -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
+            # 安装 Python 依赖
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install pyinstaller certifi urllib3
 
-          # 验证产物架构（可选）
-          file dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
+            # 构建可执行文件
+            python -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
 
-          deactivate
+            # 赋予执行权限
+            chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
 
-      # 非 Alpine 环境构建
-      - name: 设置 Python 环境（非 Alpine）
+            # 验证产物架构
+            file dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
+          "
+
+          # 4. （可选）查看产物
+          ls -l dist/
+
+      # 非 ARM64-musl 环境构建
+      - name: 设置 Python 环境（非 ARM64-musl）
         if: matrix.arch != 'arm64-musl'
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      - name: 安装依赖并构建（非 Alpine）
+      - name: 安装依赖并构建（非 ARM64-musl）
         if: matrix.arch != 'arm64-musl'
         run: |
           python -m pip install --upgrade pip
@@ -104,8 +116,8 @@ jobs:
         run: |
           move dist\CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}.exe dist\CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}
 
-      - name: 赋予 Linux/macOS 执行权限
-        if: matrix.platform != 'windows'
+      - name: 赋予 Linux/macOS 执行权限（非 ARM64-musl）
+        if: matrix.platform != 'windows' && matrix.arch != 'arm64-musl'
         run: chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
 
       - name: 上传产物到 Artifact
