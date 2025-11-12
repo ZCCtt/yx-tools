@@ -30,12 +30,11 @@ jobs:
             ext: ''
             container: ''
 
-          # 关键修改 1：使用 alpine:edge 而非 alpine:latest
           - os: ubuntu-latest
             platform: linux
             arch: arm64-musl
             ext: ''
-            container: alpine:edge  # 改用 Edge 版本
+            container: alpine:latest  # 用 latest 更稳定，避免 Edge 问题
 
           - os: macos-13
             platform: macos
@@ -53,16 +52,17 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 Alpine Edge 依赖（musl 编译）
+      - name: 安装 Alpine 依赖并通过 pip 安装 PyInstaller
         if: matrix.arch == 'arm64-musl'
         run: |
-          # 关键修改 2：明确启用 community 仓库（Edge 默认启用，但保险起见）
-          echo "http://dl-cdn.alpinelinux.org/alpine/edge/main" > /etc/apk/repositories
-          echo "http://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories
+          # 安装基础编译工具和 Python
           apk update
-          apk add --no-cache python3 py3-pip pyinstaller build-base libffi-dev openssl-dev
+          apk add --no-cache python3 py3-pip build-base libffi-dev openssl-dev
+          # 用 pip 安装 PyInstaller（关键修正）
+          python3 -m pip install --upgrade pip
+          pip install pyinstaller
 
-      - name: 设置 Python 环境
+      - name: 设置 Python 环境（非 Alpine）
         if: matrix.arch != 'arm64-musl'
         uses: actions/setup-python@v5
         with:
@@ -75,6 +75,13 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller certifi urllib3
 
+      # 所有平台统一安装项目依赖（包括 Alpine）
+      - name: 安装项目依赖
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install certifi urllib3
+
       - name: 构建 Windows 可执行文件
         if: matrix.platform == 'windows'
         run: |
@@ -83,7 +90,7 @@ jobs:
       - name: 构建 Linux/macOS 可执行文件
         if: matrix.platform != 'windows'
         run: |
-          python -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
+          python3 -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
 
       - name: 重命名 Windows 产物
         if: matrix.platform == 'windows'
