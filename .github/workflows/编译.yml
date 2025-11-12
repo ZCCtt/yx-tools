@@ -6,6 +6,13 @@ on:
       - 'v*'  # 打标签（如 v1.0.0）时触发构建和发布
   workflow_dispatch:  # 支持手动触发
 
+# ------------------------------
+# 全局并发控制（关键：开启并行构建）
+# ------------------------------
+concurrency:
+  group: ${{ github.ref }}  # 按分支/标签分组，同一时间只允许一个运行实例
+  cancel-in-progress: true  # 取消正在运行的旧任务（避免资源浪费）
+
 jobs:
   # ------------------------------
   # 1. 构建 Linux amd64（动态链接）
@@ -13,6 +20,10 @@ jobs:
   build_linux_amd64:
     name: Linux amd64
     runs-on: ubuntu-latest
+    # 单个任务并发配置
+    concurrency:
+      group: build-linux-amd64-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +51,10 @@ jobs:
   build_linux_arm64:
     name: Linux arm64 (glibc)
     runs-on: ubuntu-latest
+    # 单个任务并发配置
+    concurrency:
+      group: build-linux-arm64-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
 
@@ -65,11 +80,15 @@ jobs:
           path: dist/CloudflareSpeedTest-linux-arm64
 
   # ------------------------------
-  # 3. 构建 OpenWRT 兼容静态 ARM64（musl libc）- 修复版
+  # 3. 构建 OpenWRT 兼容静态 ARM64（musl libc）
   # ------------------------------
   build_openwrt_static_arm64:
     name: OpenWRT Static ARM64
     runs-on: ubuntu-latest
+    # 单个任务并发配置
+    concurrency:
+      group: build-openwrt-static-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
 
@@ -78,17 +97,13 @@ jobs:
           sudo apt update
           sudo apt install -y qemu-user-static
 
-      - name: 在 Alpine ARM64 容器中静态打包（修复 bash 问题）
+      - name: 在 Alpine ARM64 容器中静态打包
         run: |
-          # 关键修复：将 bash -c 改为 sh -c（Alpine 默认支持 sh）
           docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 alpine:3.18 sh -c "
-            # 安装系统依赖
             apk add --no-cache python3 py3-pip build-base zlib-dev openssl-dev musl-dev
-            # 安装 Python 依赖
             pip3 install --upgrade pip
             pip3 install pyinstaller
             pip3 install -r requirements.txt
-            # 执行静态打包（使用 --static 参数）
             python3 build.py --static
           "
 
@@ -99,18 +114,23 @@ jobs:
           path: dist/CloudflareSpeedTest-linux-arm64-static
 
   # ------------------------------
-  # 4. 构建 macOS amd64
+  # 4. 构建 macOS amd64（优化 runner，减少队列拥堵）
   # ------------------------------
   build_macos_amd64:
     name: macOS amd64
-    runs-on: macos-12  # 使用 Intel 架构的 macOS runner
+    runs-on: macos-13  # 用 macos-13 替代 macos-12，队列更短
+    # 单个任务并发配置
+    concurrency:
+      group: build-macos-amd64-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
 
-      - name: 设置 Python
+      - name: 设置 Python（明确指定 x64 架构）
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
+          architecture: 'x64'  # 确保是 Intel 架构产物
 
       - name: 安装依赖与打包
         run: |
@@ -130,11 +150,15 @@ jobs:
   # ------------------------------
   build_macos_arm64:
     name: macOS arm64
-    runs-on: macos-14  # 使用 Apple Silicon 的 macOS runner
+    runs-on: macos-14  # Apple Silicon 专用 runner
+    # 单个任务并发配置
+    concurrency:
+      group: build-macos-arm64-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
 
-      - name: 设置 Python（arm64）
+      - name: 设置 Python（arm64 架构）
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
@@ -159,6 +183,10 @@ jobs:
   build_windows_amd64:
     name: Windows amd64
     runs-on: windows-latest
+    # 单个任务并发配置
+    concurrency:
+      group: build-windows-amd64-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
 
@@ -181,13 +209,17 @@ jobs:
           path: dist/CloudflareSpeedTest-windows-amd64.exe
 
   # ------------------------------
-  # 7. 自动发布到 GitHub Releases
+  # 7. 自动发布到 GitHub Releases（依赖所有任务完成）
   # ------------------------------
   release:
     name: Create GitHub Release
     needs: [build_linux_amd64, build_linux_arm64, build_openwrt_static_arm64, build_macos_amd64, build_macos_arm64, build_windows_amd64]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    # 发布任务并发配置
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - name: 下载所有打包产物
         uses: actions/download-artifact@v4
@@ -200,7 +232,6 @@ jobs:
           find ./release_assets -type f
 
       - name: 生成 Release 说明
-        id: release_notes
         run: |
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
           echo "## Cloudflare SpeedTest ${{ github.ref_name }} 发布" >> $GITHUB_ENV
