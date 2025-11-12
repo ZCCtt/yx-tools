@@ -43,40 +43,23 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 构建 Linux ARM64-musl 版本（修正版）
+      - name: 构建 Linux ARM64-musl 版本（在容器内 chmod）
         if: matrix.arch == 'arm64-musl'
         uses: nick-fields/retry@v2
         with:
           timeout_minutes: 25
           max_attempts: 2
           command: |
-            # 加载 QEMU
             docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-
-            # 使用 Alpine 3.20（经测试更稳定）
             docker pull alpine:3.20
-
             docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 --memory 4g --cpus 2 alpine:3.20 sh -c "
-              # 安装依赖（不含 staticx，用 pip 安装 pyinstaller）
               apk update
-              apk add --no-cache \
-                python3 py3-pip build-base musl-dev \
-                zlib zlib-dev openssl openssl-dev libffi libffi-dev \
-                file lddtree
-
-              # 验证 python3 存在
+              apk add --no-cache python3 py3-pip build-base musl-dev zlib zlib-dev openssl openssl-dev libffi libffi-dev file lddtree
               python3 --version
-
-              # 创建虚拟环境
               python3 -m venv build_env
               source build_env/bin/activate
-
-              # 安装依赖
               pip install --upgrade pip
-              pip install --no-cache-dir -r requirements.txt
-              pip install --no-cache-dir pyinstaller certifi urllib3
-
-              # PyInstaller 打包（尝试静态链接）
+              pip install --no-cache-dir -r requirements.txt pyinstaller certifi urllib3
               python -m PyInstaller \
                 --onefile \
                 --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} \
@@ -97,32 +80,56 @@ jobs:
                 --strip \
                 --optimize 2 \
                 cloudflare_speedtest.py
-
-              # 验证产物
-              echo '=== 产物信息 ==='
+              # 在容器内赋予执行权限（关键！）
+              chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
               file dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
-
-              echo '=== 动态依赖 ==='
               ldd dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} || true
-
-              # 尝试运行
               ./dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --help || true
             "
 
-      # 其他平台构建不变
       - name: 设置 Python 环境（非 ARM64-musl）
         if: matrix.arch != 'arm64-musl'
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      - name: 安装依赖并构建（非 ARM64-musl）
+      - name: 安装依赖（非 ARM64-musl）
         if: matrix.arch != 'arm64-musl'
         run: |
           python -m pip install --upgrade pip
           pip install --no-cache-dir -r requirements.txt
           pip install --no-cache-dir pyinstaller certifi urllib3
 
+      - name: 构建 Windows 产物
+        if: matrix.platform == 'windows'
+        run: |
+          echo "import PyInstaller.__main__" > build.py
+          echo "PyInstaller.__main__.run([" >> build.py
+          echo "    '--onefile'," >> build.py
+          echo "    '--name', 'CloudflareSpeedTest-windows-amd64'," >> build.py
+          echo "    '--clean'," >> build.py
+          echo "    '--console'," >> build.py
+          echo "    '--hidden-import', 'requests'," >> build.py
+          echo "    '--hidden-import', 'urllib3'," >> build.py
+          echo "    '--hidden-import', 'certifi'," >> build.py
+          echo "    '--hidden-import', 'charset_normalizer'," >> build.py
+          echo "    '--hidden-import', 'idna'," >> build.py
+          echo "    '--exclude-module', 'tkinter'," >> build.py
+          echo "    '--exclude-module', 'matplotlib'," >> build.py
+          echo "    '--exclude-module', 'numpy'," >> build.py
+          echo "    '--exclude-module', 'pandas'," >> build.py
+          echo "    '--exclude-module', 'PIL'," >> build.py
+          echo "    '--exclude-module', 'cv2'," >> build.py
+          echo "    '--exclude-module', 'scipy'," >> build.py
+          echo "    '--strip'," >> build.py
+          echo "    '--optimize', '2'," >> build.py
+          echo "    'cloudflare_speedtest.py'" >> build.py
+          echo "])" >> build.py
+          python build.py
+
+      - name: 构建 Linux/macOS 产物（非 ARM64-musl）
+        if: matrix.platform != 'windows' && matrix.arch != 'arm64-musl'
+        run: |
           python -m PyInstaller \
             --onefile \
             --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} \
@@ -143,15 +150,12 @@ jobs:
             --strip \
             --optimize 2 \
             cloudflare_speedtest.py
+          # 给非容器构建的产物赋予权限
+          chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
 
-      # 产物处理
       - name: 重命名 Windows 产物
         if: matrix.platform == 'windows'
-        run: move dist\CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}.exe dist\CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}
-
-      - name: 赋予执行权限
-        if: matrix.platform != 'windows'
-        run: chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
+        run: move dist\CloudflareSpeedTest-windows-amd64.exe dist\CloudflareSpeedTest-windows-amd64.exe
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
@@ -160,7 +164,6 @@ jobs:
           path: dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}
           retention-days: 15
 
-  # Release 步骤不变
   release:
     name: Create GitHub Release
     needs: build
@@ -208,7 +211,7 @@ jobs:
             - **Linux (ARM64, musl)**：CloudflareSpeedTest-linux-arm64-musl
               - ✅ 基于 Alpine Linux musl libc 构建
               - ✅ 兼容 OpenWRT、Termux、Raspberry Pi 等 ARM64 设备
-              - ✅ 无需系统依赖（PyInstaller 已打包 Python 解释器）
+              - ✅ 已在容器内赋予执行权限，下载即可运行
             - **macOS (Intel)**：CloudflareSpeedTest-macos-amd64
             - **macOS (Apple Silicon)**：CloudflareSpeedTest-macos-arm64
             
@@ -223,7 +226,7 @@ jobs:
             ### 🚀 使用方法
             ```bash
             # Linux/macOS 用户
-            chmod +x 下载的文件名
+            chmod +x 下载的文件名  # （ARM64-musl 版本可省略此步）
             ./下载的文件名
             ```
             Windows 用户直接双击运行即可。
