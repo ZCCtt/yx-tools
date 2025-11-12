@@ -1,63 +1,235 @@
-name: 自动构建 OpenWRT 兼容静态 ARM64 版本
+name: 多平台自动打包 + OpenWRT 静态版
+
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*'  # 打标签（如 v1.0.0）时触发构建和发布
   workflow_dispatch:  # 支持手动触发
 
 jobs:
-  build_static_arm64:
-    name: 静态打包 Linux ARM64（OpenWRT 兼容）
+  # ------------------------------
+  # 1. 构建 Linux amd64（动态链接）
+  # ------------------------------
+  build_linux_amd64:
+    name: Linux amd64
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 安装 QEMU（用于模拟 ARM64）
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: 安装依赖与打包
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+          python build.py  # 普通打包（自动识别平台）
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloudflareSpeedTest-linux-amd64
+          path: dist/CloudflareSpeedTest-linux-amd64
+
+  # ------------------------------
+  # 2. 构建 Linux arm64（动态链接，Ubuntu glibc）
+  # ------------------------------
+  build_linux_arm64:
+    name: Linux arm64 (glibc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 QEMU（模拟 ARM64）
         run: |
           sudo apt update
           sudo apt install -y qemu-user-static
 
-      - name: 通过 Docker Alpine ARM64 执行静态打包（修复版）
+      - name: 在 ARM64 容器中打包
         run: |
-          # 启动 Alpine ARM64 容器，挂载当前目录到 /app
-          docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 alpine:3.18 sh -c "
-            # 关键修复1：修正包名（pyinstaller 而非 py3-pyinstaller）
-            # 关键修复2：先安装 python3 和 py3-pip，确保 pip3 可用
-            apk add --no-cache python3 py3-pip build-base zlib-dev openssl-dev musl-dev
-            # 关键修复3：用 pip3 安装 PyInstaller（Alpine 源无 py3-pyinstaller，直接用 pip 安装）
+          docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 ubuntu:22.04 bash -c "
+            apt update && apt install -y python3 python3-pip python3-venv libpython3.10
+            python3 -m pip install --upgrade pip
             pip3 install pyinstaller
-            # 安装项目依赖
             pip3 install -r requirements.txt
-            # 执行静态打包
-            python3 build_static.py
+            python3 build.py
           "
 
-      - name: 查看打包产物
-        run: ls -l dist/
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloudflareSpeedTest-linux-arm64
+          path: dist/CloudflareSpeedTest-linux-arm64
 
-      - name: 上传静态产物到 Artifact
+  # ------------------------------
+  # 3. 构建 OpenWRT 兼容静态 ARM64（musl libc）
+  # ------------------------------
+  build_openwrt_static_arm64:
+    name: OpenWRT Static ARM64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 QEMU（模拟 ARM64）
+        run: |
+          sudo apt update
+          sudo apt install -y qemu-user-static
+
+      - name: 在 Alpine ARM64 容器中静态打包
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 alpine:3.18 bash -c "
+            # 安装系统依赖
+            apk add --no-cache python3 py3-pip build-base zlib-dev openssl-dev musl-dev
+            # 安装 Python 依赖
+            pip3 install --upgrade pip
+            pip3 install pyinstaller
+            pip3 install -r requirements.txt
+            # 执行静态打包（使用 --static 参数）
+            python3 build.py --static
+          "
+
+      - name: 上传静态产物
         uses: actions/upload-artifact@v4
         with:
           name: CloudflareSpeedTest-linux-arm64-static
           path: dist/CloudflareSpeedTest-linux-arm64-static
 
-      - name: 生成 Release（打标签时自动发布）
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+  # ------------------------------
+  # 4. 构建 macOS amd64
+  # ------------------------------
+  build_macos_amd64:
+    name: macOS amd64
+    runs-on: macos-12  # 使用 Intel 架构的 macOS  runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: 安装依赖与打包
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+          python build.py
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloudflareSpeedTest-macos-amd64
+          path: dist/CloudflareSpeedTest-macos-amd64
+
+  # ------------------------------
+  # 5. 构建 macOS arm64（Apple Silicon）
+  # ------------------------------
+  build_macos_arm64:
+    name: macOS arm64
+    runs-on: macos-14  # 使用 Apple Silicon 的 macOS  runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 Python（arm64）
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          architecture: 'arm64'
+
+      - name: 安装依赖与打包
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+          python build.py
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloudflareSpeedTest-macos-arm64
+          path: dist/CloudflareSpeedTest-macos-arm64
+
+  # ------------------------------
+  # 6. 构建 Windows amd64
+  # ------------------------------
+  build_windows_amd64:
+    name: Windows amd64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: 安装依赖与打包
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+          python build.py
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloudflareSpeedTest-windows-amd64
+          path: dist/CloudflareSpeedTest-windows-amd64.exe
+
+  # ------------------------------
+  # 7. 自动发布到 GitHub Releases
+  # ------------------------------
+  release:
+    name: Create GitHub Release
+    needs: [build_linux_amd64, build_linux_arm64, build_openwrt_static_arm64, build_macos_amd64, build_macos_arm64, build_windows_amd64]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: 下载所有打包产物
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release_assets
+
+      - name: 查看产物列表
+        run: |
+          echo "Release assets:"
+          find ./release_assets -type f
+
+      - name: 生成 Release 说明
+        id: release_notes
+        run: |
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+          echo "## Cloudflare SpeedTest ${{ github.ref_name }} 发布" >> $GITHUB_ENV
+          echo "" >> $GITHUB_ENV
+          echo "### 📦 下载链接" >> $GITHUB_ENV
+          echo "- [Linux amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-linux-amd64)" >> $GITHUB_ENV
+          echo "- [Linux arm64 (glibc)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-linux-arm64)" >> $GITHUB_ENV
+          echo "- [**OpenWRT 静态 ARM64**](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-linux-arm64-static) ✅" >> $GITHUB_ENV
+          echo "- [macOS amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-macos-amd64)" >> $GITHUB_ENV
+          echo "- [macOS arm64 (Apple Silicon)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-macos-arm64)" >> $GITHUB_ENV
+          echo "- [Windows amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-windows-amd64.exe)" >> $GITHUB_ENV
+          echo "" >> $GITHUB_ENV
+          echo "### 📌 使用说明" >> $GITHUB_ENV
+          echo "1. 下载对应平台的文件" >> $GITHUB_ENV
+          echo "2. Linux/macOS: 赋予执行权限 \`chmod +x 文件名\`" >> $GITHUB_ENV
+          echo "3. 直接运行即可" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: 创建 Release
         uses: softprops/action-gh-release@v1
         with:
-          name: 版本 ${{ github.ref_name }}（含 OpenWRT 静态版）
           tag_name: ${{ github.ref_name }}
-          files: dist/CloudflareSpeedTest-linux-arm64-static
-          body: |
-            ## Cloudflare SpeedTest ${{ github.ref_name }} 发布
-            
-            ### ✅ OpenWRT 兼容静态版（推荐）
-            - [CloudflareSpeedTest-linux-arm64-static](https://github.com/ZCCtt/yx-tools/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-linux-arm64-static)
-            > 📌 **特点**：静态编译，无需安装任何依赖，直接在 OpenWRT（musl libc）上运行！
-            
-            ### 使用说明
-            1. 下载静态版文件
-            2. 上传到 OpenWRT（如 /tmp 目录）
-            3. 赋予权限：`chmod +x CloudflareSpeedTest-linux-arm64-static`
-            4. 直接运行：`./CloudflareSpeedTest-linux-arm64-static`
+          name: 版本 ${{ github.ref_name }}
+          body: ${{ env.RELEASE_NOTES }}
+          files: |
+            ./release_assets/CloudflareSpeedTest-linux-amd64/CloudflareSpeedTest-linux-amd64
+            ./release_assets/CloudflareSpeedTest-linux-arm64/CloudflareSpeedTest-linux-arm64
+            ./release_assets/CloudflareSpeedTest-linux-arm64-static/CloudflareSpeedTest-linux-arm64-static
+            ./release_assets/CloudflareSpeedTest-macos-amd64/CloudflareSpeedTest-macos-amd64
+            ./release_assets/CloudflareSpeedTest-macos-arm64/CloudflareSpeedTest-macos-arm64
+            ./release_assets/CloudflareSpeedTest-windows-amd64/CloudflareSpeedTest-windows-amd64.exe
+          draft: false
+          prerelease: false
