@@ -114,8 +114,9 @@ jobs:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    permissions:
+    # 修改 release 步骤的 if 条件，同时支持 tag 推送和手动触发
+     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+permissions:
       contents: write
     steps:
       - name: 检出代码
