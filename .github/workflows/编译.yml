@@ -3,42 +3,32 @@ name: 多平台自动打包 + OpenWRT 静态版
 on:
   push:
     tags:
-      - 'v*'  # 打标签（如 v1.0.0）时触发构建和发布
-  workflow_dispatch:  # 支持手动触发
+      - 'v*'
+  workflow_dispatch:
 
-# ------------------------------
-# 全局并发控制（关键：开启并行构建）
-# ------------------------------
 concurrency:
-  group: ${{ github.ref }}  # 按分支/标签分组，同一时间只允许一个运行实例
-  cancel-in-progress: true  # 取消正在运行的旧任务（避免资源浪费）
+  group: ${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # ------------------------------
-  # 1. 构建 Linux amd64（动态链接）
-  # ------------------------------
   build_linux_amd64:
     name: Linux amd64
     runs-on: ubuntu-latest
-    # 单个任务并发配置
     concurrency:
       group: build-linux-amd64-${{ github.ref }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
-
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
-
       - name: 安装依赖与打包
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
-          python build.py  # 普通打包（自动识别平台）
-
+          python build.py
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
@@ -46,12 +36,11 @@ jobs:
           path: dist/CloudflareSpeedTest-linux-amd64
 
   # ------------------------------
-  # 2. 构建 Linux arm64（动态链接，Ubuntu glibc）
+  # 修复：Linux arm64 (glibc) 源同步 + Python 安装问题
   # ------------------------------
   build_linux_arm64:
     name: Linux arm64 (glibc)
     runs-on: ubuntu-latest
-    # 单个任务并发配置
     concurrency:
       group: build-linux-arm64-${{ github.ref }}
       cancel-in-progress: true
@@ -63,10 +52,41 @@ jobs:
           sudo apt update
           sudo apt install -y qemu-user-static
 
-      - name: 在 ARM64 容器中打包
+      - name: 在 ARM64 容器中打包（修复源 + 重试 + 验证）
         run: |
           docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 ubuntu:22.04 bash -c "
-            apt update && apt install -y python3 python3-pip python3-venv libpython3.10
+            # 关键1：更换国内 Ubuntu ARM64 源（解决 ports.ubuntu.com 同步问题）
+            echo '更换为阿里云 Ubuntu ARM64 源...'
+            cat > /etc/apt/sources.list << EOF
+            deb http://mirrors.aliyun.com/ubuntu-ports/ jammy main restricted universe multiverse
+            deb http://mirrors.aliyun.com/ubuntu-ports/ jammy-updates main restricted universe multiverse
+            deb http://mirrors.aliyun.com/ubuntu-ports/ jammy-security main restricted universe multiverse
+            EOF
+
+            # 关键2：apt update 失败自动重试（最多3次）
+            echo '正在更新软件源（失败将重试）...'
+            for i in {1..3}; do
+              apt update && break
+              echo '第 $i 次更新失败，10秒后重试...'
+              sleep 10
+            done
+
+            # 关键3：安装 Python 并验证是否安装成功
+            echo '正在安装 Python3...'
+            apt install -y python3 python3-pip python3-venv libpython3.10
+
+            # 验证 Python 和 pip 是否可用
+            if ! command -v python3 &> /dev/null; then
+              echo '❌ Python3 安装失败！'
+              exit 1
+            fi
+            if ! command -v pip3 &> /dev/null; then
+              echo '❌ pip3 安装失败！'
+              exit 1
+            fi
+            echo '✅ Python3 和 pip3 安装成功'
+
+            # 后续打包步骤
             python3 -m pip install --upgrade pip
             pip3 install pyinstaller
             pip3 install -r requirements.txt
@@ -79,24 +99,18 @@ jobs:
           name: CloudflareSpeedTest-linux-arm64
           path: dist/CloudflareSpeedTest-linux-arm64
 
-  # ------------------------------
-  # 3. 构建 OpenWRT 兼容静态 ARM64（musl libc）
-  # ------------------------------
   build_openwrt_static_arm64:
     name: OpenWRT Static ARM64
     runs-on: ubuntu-latest
-    # 单个任务并发配置
     concurrency:
       group: build-openwrt-static-${{ github.ref }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
-
       - name: 安装 QEMU（模拟 ARM64）
         run: |
           sudo apt update
           sudo apt install -y qemu-user-static
-
       - name: 在 Alpine ARM64 容器中静态打包
         run: |
           docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 alpine:3.18 sh -c "
@@ -106,117 +120,91 @@ jobs:
             pip3 install -r requirements.txt
             python3 build.py --static
           "
-
       - name: 上传静态产物
         uses: actions/upload-artifact@v4
         with:
           name: CloudflareSpeedTest-linux-arm64-static
           path: dist/CloudflareSpeedTest-linux-arm64-static
 
-  # ------------------------------
-  # 4. 构建 macOS amd64（优化 runner，减少队列拥堵）
-  # ------------------------------
   build_macos_amd64:
     name: macOS amd64
-    runs-on: macos-13  # 用 macos-13 替代 macos-12，队列更短
-    # 单个任务并发配置
+    runs-on: macos-13
     concurrency:
       group: build-macos-amd64-${{ github.ref }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
-
-      - name: 设置 Python（明确指定 x64 架构）
+      - name: 设置 Python（x64）
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
-          architecture: 'x64'  # 确保是 Intel 架构产物
-
+          architecture: 'x64'
       - name: 安装依赖与打包
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
           python build.py
-
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: CloudflareSpeedTest-macos-amd64
           path: dist/CloudflareSpeedTest-macos-amd64
 
-  # ------------------------------
-  # 5. 构建 macOS arm64（Apple Silicon）
-  # ------------------------------
   build_macos_arm64:
     name: macOS arm64
-    runs-on: macos-14  # Apple Silicon 专用 runner
-    # 单个任务并发配置
+    runs-on: macos-14
     concurrency:
       group: build-macos-arm64-${{ github.ref }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
-
-      - name: 设置 Python（arm64 架构）
+      - name: 设置 Python（arm64）
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
           architecture: 'arm64'
-
       - name: 安装依赖与打包
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
           python build.py
-
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: CloudflareSpeedTest-macos-arm64
           path: dist/CloudflareSpeedTest-macos-arm64
 
-  # ------------------------------
-  # 6. 构建 Windows amd64
-  # ------------------------------
   build_windows_amd64:
     name: Windows amd64
     runs-on: windows-latest
-    # 单个任务并发配置
     concurrency:
       group: build-windows-amd64-${{ github.ref }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
-
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
-
       - name: 安装依赖与打包
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
           python build.py
-
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: CloudflareSpeedTest-windows-amd64
           path: dist/CloudflareSpeedTest-windows-amd64.exe
 
-  # ------------------------------
-  # 7. 自动发布到 GitHub Releases（依赖所有任务完成）
-  # ------------------------------
   release:
     name: Create GitHub Release
     needs: [build_linux_amd64, build_linux_arm64, build_openwrt_static_arm64, build_macos_amd64, build_macos_arm64, build_windows_amd64]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    # 发布任务并发配置
     concurrency:
       group: release-${{ github.ref }}
       cancel-in-progress: true
@@ -225,12 +213,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ./release_assets
-
       - name: 查看产物列表
-        run: |
-          echo "Release assets:"
-          find ./release_assets -type f
-
+        run: find ./release_assets -type f
       - name: 生成 Release 说明
         run: |
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
@@ -249,7 +233,6 @@ jobs:
           echo "2. Linux/macOS: 赋予执行权限 \`chmod +x 文件名\`" >> $GITHUB_ENV
           echo "3. 直接运行即可" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
-
       - name: 创建 Release
         uses: softprops/action-gh-release@v1
         with:
