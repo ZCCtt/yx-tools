@@ -2,8 +2,8 @@ name: 多平台自动打包与发布
 on:
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - 'v*'  # 标签触发（如 v1.0.0）
+  workflow_dispatch:  # 手动触发
 
 jobs:
   build:
@@ -14,7 +14,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-13]
         arch: [amd64, arm64]
         exclude:
-          # 过滤不支持的组合（如 Windows 无 arm64 官方 runner）
+          # 过滤不支持的组合（Windows 无官方 arm64 runner）
           - os: windows-latest
             arch: arm64
     steps:
@@ -32,7 +32,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: 执行本地打包脚本
-        run: python build.py  # 你的自动打包脚本文件名
+        run: python build.py
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
@@ -66,3 +66,17 @@ jobs:
           tag_name: ${{ env.VERSION }}
           files: artifacts/**/*
           generate_release_notes: true
+          body: |
+            ## Cloudflare SpeedTest ${{ env.VERSION }} 发布
+            
+            ### 下载链接
+            - Windows amd64: [CloudflareSpeedTest-windows-amd64.exe](https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-windows-amd64.exe)
+            - Linux amd64: [CloudflareSpeedTest-linux-amd64](https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-linux-amd64)
+            - Linux arm64: [CloudflareSpeedTest-linux-arm64](https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-linux-arm64)
+            - macOS amd64: [CloudflareSpeedTest-macos-amd64](https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-macos-amd64)
+            - macOS arm64: [CloudflareSpeedTest-macos-arm64](https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-macos-arm64)
+            
+            ### 使用说明
+            1. 下载对应平台的可执行文件
+            2. 赋予执行权限（Linux/macOS）：`chmod +x 文件名`
+            3. 直接运行：`./文件名`
