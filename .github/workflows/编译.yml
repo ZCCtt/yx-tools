@@ -16,22 +16,64 @@ jobs:
         exclude:
           - os: windows-latest
             arch: arm64
+        include:
+          # 为 Linux arm64 配置 Docker 构建环境
+          - os: ubuntu-latest
+            arch: arm64
+            docker_image: arm64v8/ubuntu:22.04
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: 设置 Python
+      - name: 设置 Python（非 ARM64 平台）
+        if: matrix.arch != 'arm64'
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      - name: 安装依赖与打包工具
+      - name: 安装依赖与打包工具（非 ARM64 平台）
+        if: matrix.arch != 'arm64'
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
 
-      - name: 执行本地打包脚本
+      - name: 执行本地打包脚本（非 ARM64 平台）
+        if: matrix.arch != 'arm64'
         run: python build.py
+
+      - name: 构建 Linux ARM64 版本（通过 Docker + QEMU）
+        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
+        uses: nick-fields/retry@v2
+        with:
+          timeout_minutes: 25
+          max_attempts: 2
+          command: |
+            # 加载 QEMU 多架构支持
+            docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+            # 拉取 ARM64 Ubuntu 镜像并在容器内执行打包
+            docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 ${{ matrix.docker_image }} sh -c "
+              apt update && apt install -y python3 python3-pip python3-venv build-essential zlib1g-dev libssl-dev libffi-dev
+              python3 --version
+              python3 -m venv build_env && source build_env/bin/activate
+              pip install --upgrade pip
+              pip install --no-cache-dir -r requirements.txt pyinstaller certifi urllib3
+              python -m PyInstaller \
+                --onefile \
+                --name CloudflareSpeedTest-linux-arm64 \
+                --clean \
+                --console \
+                --hidden-import requests \
+                --hidden-import urllib3 \
+                --hidden-import certifi \
+                --hidden-import charset_normalizer \
+                --hidden-import idna \
+                --exclude-module tkinter matplotlib numpy pandas PIL cv2 scipy \
+                --strip \
+                --optimize 2 \
+                cloudflare_speedtest.py
+              chmod +x dist/CloudflareSpeedTest-linux-arm64
+            "
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
