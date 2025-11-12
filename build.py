@@ -10,7 +10,6 @@ import io
 
 # 修复 Windows 控制台中文编码问题
 if sys.platform == 'win32':
-    # 将标准输出和标准错误流设置为 UTF-8
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
