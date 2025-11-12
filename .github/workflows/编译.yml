@@ -34,7 +34,7 @@ jobs:
             platform: linux
             arch: arm64-musl
             ext: ''
-            container: alpine:latest  # 用 latest 更稳定，避免 Edge 问题
+            container: alpine:latest
 
           - os: macos-13
             platform: macos
@@ -52,15 +52,27 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 Alpine 依赖并通过 pip 安装 PyInstaller
+      - name: 在 Alpine 中使用虚拟环境构建（musl 版本）
         if: matrix.arch == 'arm64-musl'
         run: |
-          # 安装基础编译工具和 Python
+          # 1. 安装系统依赖（Python、编译工具等）
           apk update
           apk add --no-cache python3 py3-pip build-base libffi-dev openssl-dev
-          # 用 pip 安装 PyInstaller（关键修正）
-          python3 -m pip install --upgrade pip
-          pip install pyinstaller
+
+          # 2. 创建并激活虚拟环境（关键：避开系统 Python 保护）
+          python3 -m venv build_env
+          source build_env/bin/activate
+
+          # 3. 在虚拟环境中安装依赖和 PyInstaller
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller certifi urllib3
+
+          # 4. 构建可执行文件（必须在虚拟环境中运行）
+          python -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
+
+          # 5. （可选）退出虚拟环境
+          deactivate
 
       - name: 设置 Python 环境（非 Alpine）
         if: matrix.arch != 'arm64-musl'
@@ -68,29 +80,14 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: 安装 Python 依赖（非 Alpine）
+      - name: 安装依赖并构建（非 Alpine）
         if: matrix.arch != 'arm64-musl'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller certifi urllib3
 
-      # 所有平台统一安装项目依赖（包括 Alpine）
-      - name: 安装项目依赖
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install certifi urllib3
-
-      - name: 构建 Windows 可执行文件
-        if: matrix.platform == 'windows'
-        run: |
           python -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
-
-      - name: 构建 Linux/macOS 可执行文件
-        if: matrix.platform != 'windows'
-        run: |
-          python3 -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
 
       - name: 重命名 Windows 产物
         if: matrix.platform == 'windows'
@@ -101,7 +98,7 @@ jobs:
         if: matrix.platform != 'windows'
         run: chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
 
-      - name: 验证 Linux ARM64-musl 产物
+      - name: 验证 Linux ARM64-musl 产物（确保静态链接）
         if: matrix.arch == 'arm64-musl'
         run: |
           file dist/CloudflareSpeedTest-linux-arm64-musl
@@ -148,21 +145,23 @@ jobs:
             - **Windows (x64)**：CloudflareSpeedTest-windows-amd64.exe
             - **Linux (x64, glibc)**：CloudflareSpeedTest-linux-amd64
             - **Linux (ARM64, musl)**：CloudflareSpeedTest-linux-arm64-musl
-              - ✅ **兼容 OpenWRT、Termux、Alpine**
+              - ✅ **兼容 OpenWRT、Termux、Alpine Linux**
+              - ✅ 完全静态链接，无需任何依赖！
             - **macOS (Intel)**：CloudflareSpeedTest-macos-amd64
             - **macOS (Apple Silicon)**：CloudflareSpeedTest-macos-arm64
 
-            ### 🌟 功能
-            - 97 个全球数据中心
-            - 城市智能识别
-            - 3 种测试模式
-            - 自定义参数
-            - CSV 报告生成
-            - 小白友好
+            ### 🌟 核心功能
+            - 🎯 内置 97 个全球 Cloudflare 数据中心机场码
+            - 🌍 支持城市名称智能识别（如输入"香港"自动匹配）
+            - ⚙️ 3 种预设测试模式：快速/标准/高质量
+            - 🔧 完全自定义测试参数（线程数、超时等）
+            - 📊 自动生成 CSV 测试报告（result.csv）
+            - 🆕 小白模式：只需输入 3 个数字即可快速测速
 
-            ### 🚀 使用
+            ### 🚀 使用方法
             ```bash
             # Linux/macOS
             chmod +x 文件名
             ./文件名
             ```
+            Windows 用户直接双击运行即可。
