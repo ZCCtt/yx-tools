@@ -2,8 +2,8 @@ name: 多平台自动打包与发布
 on:
   push:
     tags:
-      - 'v*'  # 标签触发（如 v1.0.0）
-  workflow_dispatch:  # 手动触发
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,7 +14,6 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-13]
         arch: [amd64, arm64]
         exclude:
-          # 过滤不支持的组合（Windows 无官方 arm64 runner）
           - os: windows-latest
             arch: arm64
     steps:
@@ -46,10 +45,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 下载所有产物
+      - name: 下载所有产物（合并到 dist 目录）
         uses: actions/download-artifact@v4
         with:
-          path: ./artifacts
+          path: ./dist
+          merge-multiple: true
+
+      - name: 查看下载的文件（调试）
+        run: ls -l ./dist
 
       - name: 生成版本号
         run: |
@@ -64,7 +67,7 @@ jobs:
         with:
           name: 版本 ${{ env.VERSION }}
           tag_name: ${{ env.VERSION }}
-          files: artifacts/**/*
+          files: ./dist/*
           generate_release_notes: true
           body: |
             ## Cloudflare SpeedTest ${{ env.VERSION }} 发布
