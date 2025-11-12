@@ -3,8 +3,8 @@ name: Build All Platforms
 on:
   push:
     tags:
-      - 'v*'  # 当推送 v1.0.0 这样的 tag 时触发
-  workflow_dispatch:  # 也支持手动触发
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,7 +13,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    
+
     strategy:
       matrix:
         include:
@@ -22,25 +22,26 @@ jobs:
             platform: windows
             arch: amd64
             ext: .exe
-            
-          # Linux x64
+
+          # Linux x64 (glibc)
           - os: ubuntu-latest
             platform: linux
             arch: amd64
             ext: ''
-            
-          # Linux ARM64
-          - os: ubuntu-24.04-arm
+
+          # Linux ARM64 (musl, static) - 兼容 OpenWRT/Termux
+          - os: ubuntu-latest
             platform: linux
-            arch: arm64
+            arch: arm64-musl
             ext: ''
-            
+            container: alpine:latest  # 使用 Alpine/musl 环境
+
           # macOS Intel
           - os: macos-13
             platform: macos
             arch: amd64
             ext: ''
-            
+
           # macOS Apple Silicon
           - os: macos-14
             platform: macos
@@ -51,19 +52,23 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 Python 环境
+      - name: 在 Alpine 中安装依赖（musl 编译）
+        if: matrix.arch == 'arm64-musl'
+        run: |
+          apk add --no-cache python3 py3-pip py3-pyinstaller build-base libffi-dev openssl-dev
+
+      - name: 设置 Python 环境（非 Alpine）
+        if: matrix.arch != 'arm64-musl'
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      - name: 安装依赖
+      - name: 安装依赖（非 Alpine）
+        if: matrix.arch != 'arm64-musl'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
-          # 确保 SSL 支持
-          pip install --upgrade certifi
-          pip install --upgrade urllib3
+          pip install pyinstaller certifi urllib3
 
       - name: 构建可执行文件 (Windows)
         if: matrix.platform == 'windows'
@@ -73,7 +78,6 @@ jobs:
       - name: 构建可执行文件 (Linux/macOS)
         if: matrix.platform != 'windows'
         run: |
-          # 使用验证成功的命令，解决 macOS 符号链接问题
           python -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
 
       - name: 重命名文件（Windows）
@@ -85,6 +89,12 @@ jobs:
         if: matrix.platform != 'windows'
         run: chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
 
+      - name: 验证 Linux ARM64-musl 静态链接（可选）
+        if: matrix.arch == 'arm64-musl'
+        run: |
+          file dist/CloudflareSpeedTest-linux-arm64-musl
+          # 应输出 "statically linked"
+
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
@@ -92,7 +102,6 @@ jobs:
           path: dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}
           retention-days: 30
 
-  # 创建 Release（当推送 tag 时）
   release:
     name: Create Release
     needs: build
@@ -101,7 +110,7 @@ jobs:
     permissions:
       contents: write
       packages: write
-    
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -120,7 +129,7 @@ jobs:
           files: |
             artifacts/CloudflareSpeedTest-windows-amd64/CloudflareSpeedTest-windows-amd64.exe
             artifacts/CloudflareSpeedTest-linux-amd64/CloudflareSpeedTest-linux-amd64
-            artifacts/CloudflareSpeedTest-linux-arm64/CloudflareSpeedTest-linux-arm64
+            artifacts/CloudflareSpeedTest-linux-arm64-musl/CloudflareSpeedTest-linux-arm64-musl
             artifacts/CloudflareSpeedTest-macos-amd64/CloudflareSpeedTest-macos-amd64
             artifacts/CloudflareSpeedTest-macos-arm64/CloudflareSpeedTest-macos-arm64
           draft: false
@@ -131,8 +140,8 @@ jobs:
             
             ### 📦 可执行文件
             - **Windows (x64)**: CloudflareSpeedTest-windows-amd64.exe
-            - **Linux (x64)**: CloudflareSpeedTest-linux-amd64
-            - **Linux (ARM64)**: CloudflareSpeedTest-linux-arm64
+            - **Linux (x64, glibc)**: CloudflareSpeedTest-linux-amd64
+            - **Linux (ARM64, musl)**: CloudflareSpeedTest-linux-arm64-musl 🌟 **兼容 OpenWRT/Termux**
             - **macOS (Intel)**: CloudflareSpeedTest-macos-amd64
             - **macOS (Apple Silicon)**: CloudflareSpeedTest-macos-arm64
             
@@ -149,3 +158,8 @@ jobs:
             2. 双击运行（Windows）或赋予执行权限（Linux/macOS）
             3. 按提示选择机场码和测试配置
             4. 等待测速完成，查看 result.csv 结果文件
+            
+            ### 💡 特别说明
+            - **Linux ARM64 用户**：
+              - 若使用 Ubuntu/Debian 等主流发行版，请下载 `linux-amd64`（若为 x64）或自行编译。
+              - 若使用 **OpenWRT、Termux、Alpine** 等 musl 环境，请下载 **`linux-arm64-musl`** 版本，无需额外依赖！
