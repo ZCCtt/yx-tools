@@ -3,14 +3,21 @@ name: 多平台自动打包 + OpenWRT 静态版
 on:
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - 'v*'  # 仅匹配 v1.0.0、v2.1.5 等标签
+  workflow_dispatch:  # 手动触发时也执行（新增：支持手动发布）
+    inputs:
+      release_version:  # 手动触发时需输入版本号（如 v1.0.0）
+        description: '请输入 Release 版本号（格式：vX.Y.Z）'
+        required: true
+        default: 'v1.0.0'
 
+# 全局并发控制
 concurrency:
   group: ${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # 1. Linux amd64 打包（不变）
   build_linux_amd64:
     name: Linux amd64
     runs-on: ubuntu-latest
@@ -35,9 +42,7 @@ jobs:
           name: CloudflareSpeedTest-linux-amd64
           path: dist/CloudflareSpeedTest-linux-amd64
 
-  # ------------------------------
-  # 修复：Linux arm64 (glibc) 源同步 + Python 安装问题
-  # ------------------------------
+  # 2. Linux arm64 (glibc) 打包（已修复源问题）
   build_linux_arm64:
     name: Linux arm64 (glibc)
     runs-on: ubuntu-latest
@@ -46,59 +51,42 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
-
-      - name: 安装 QEMU（模拟 ARM64）
+      - name: 安装 QEMU
         run: |
           sudo apt update
           sudo apt install -y qemu-user-static
-
-      - name: 在 ARM64 容器中打包（修复源 + 重试 + 验证）
+      - name: 在 ARM64 容器中打包
         run: |
           docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 ubuntu:22.04 bash -c "
-            # 关键1：更换国内 Ubuntu ARM64 源（解决 ports.ubuntu.com 同步问题）
-            echo '更换为阿里云 Ubuntu ARM64 源...'
+            # 更换阿里云 ARM64 源
             cat > /etc/apt/sources.list << EOF
             deb http://mirrors.aliyun.com/ubuntu-ports/ jammy main restricted universe multiverse
             deb http://mirrors.aliyun.com/ubuntu-ports/ jammy-updates main restricted universe multiverse
             deb http://mirrors.aliyun.com/ubuntu-ports/ jammy-security main restricted universe multiverse
             EOF
-
-            # 关键2：apt update 失败自动重试（最多3次）
-            echo '正在更新软件源（失败将重试）...'
+            # apt update 重试机制
             for i in {1..3}; do
               apt update && break
               echo '第 $i 次更新失败，10秒后重试...'
               sleep 10
             done
-
-            # 关键3：安装 Python 并验证是否安装成功
-            echo '正在安装 Python3...'
+            # 安装并验证 Python
             apt install -y python3 python3-pip python3-venv libpython3.10
-
-            # 验证 Python 和 pip 是否可用
-            if ! command -v python3 &> /dev/null; then
-              echo '❌ Python3 安装失败！'
-              exit 1
-            fi
-            if ! command -v pip3 &> /dev/null; then
-              echo '❌ pip3 安装失败！'
-              exit 1
-            fi
-            echo '✅ Python3 和 pip3 安装成功'
-
-            # 后续打包步骤
+            if ! command -v python3 &> /dev/null; then exit 1; fi
+            if ! command -v pip3 &> /dev/null; then exit 1; fi
+            # 打包步骤
             python3 -m pip install --upgrade pip
             pip3 install pyinstaller
             pip3 install -r requirements.txt
             python3 build.py
           "
-
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: CloudflareSpeedTest-linux-arm64
           path: dist/CloudflareSpeedTest-linux-arm64
 
+  # 3. OpenWRT 静态 ARM64 打包（不变）
   build_openwrt_static_arm64:
     name: OpenWRT Static ARM64
     runs-on: ubuntu-latest
@@ -107,7 +95,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
-      - name: 安装 QEMU（模拟 ARM64）
+      - name: 安装 QEMU
         run: |
           sudo apt update
           sudo apt install -y qemu-user-static
@@ -126,6 +114,7 @@ jobs:
           name: CloudflareSpeedTest-linux-arm64-static
           path: dist/CloudflareSpeedTest-linux-arm64-static
 
+  # 4. macOS amd64 打包（不变）
   build_macos_amd64:
     name: macOS amd64
     runs-on: macos-13
@@ -151,6 +140,7 @@ jobs:
           name: CloudflareSpeedTest-macos-amd64
           path: dist/CloudflareSpeedTest-macos-amd64
 
+  # 5. macOS arm64 打包（不变）
   build_macos_arm64:
     name: macOS arm64
     runs-on: macos-14
@@ -176,6 +166,7 @@ jobs:
           name: CloudflareSpeedTest-macos-arm64
           path: dist/CloudflareSpeedTest-macos-arm64
 
+  # 6. Windows amd64 打包（不变）
   build_windows_amd64:
     name: Windows amd64
     runs-on: windows-latest
@@ -200,11 +191,15 @@ jobs:
           name: CloudflareSpeedTest-windows-amd64
           path: dist/CloudflareSpeedTest-windows-amd64.exe
 
+  # ------------------------------
+  # 修复：Release 任务（支持标签触发 + 手动触发）
+  # ------------------------------
   release:
     name: Create GitHub Release
     needs: [build_linux_amd64, build_linux_arm64, build_openwrt_static_arm64, build_macos_amd64, build_macos_arm64, build_windows_amd64]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    # 关键修复1：支持两种触发方式（标签推送 + 手动触发）
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     concurrency:
       group: release-${{ github.ref }}
       cancel-in-progress: true
@@ -213,32 +208,51 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ./release_assets
-      - name: 查看产物列表
-        run: find ./release_assets -type f
+
+      - name: 查看产物列表（调试用）
+        run: |
+          echo "产物目录结构："
+          find ./release_assets -type f
+
+      - name: 确定 Release 版本号（关键修复2）
+        run: |
+          # 标签触发时，用标签作为版本号（如 v1.0.0）
+          if [ "${{ github.event_name }}" = "push" ]; then
+            RELEASE_VERSION=${{ github.ref_name }}
+          # 手动触发时，用输入的版本号
+          else
+            RELEASE_VERSION=${{ github.event.inputs.release_version }}
+          fi
+          echo "当前 Release 版本号：$RELEASE_VERSION"
+          echo "RELEASE_VERSION=$RELEASE_VERSION" >> $GITHUB_ENV
+
       - name: 生成 Release 说明
         run: |
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-          echo "## Cloudflare SpeedTest ${{ github.ref_name }} 发布" >> $GITHUB_ENV
+          echo "## Cloudflare SpeedTest ${{ env.RELEASE_VERSION }} 发布" >> $GITHUB_ENV
           echo "" >> $GITHUB_ENV
           echo "### 📦 下载链接" >> $GITHUB_ENV
-          echo "- [Linux amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-linux-amd64)" >> $GITHUB_ENV
-          echo "- [Linux arm64 (glibc)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-linux-arm64)" >> $GITHUB_ENV
-          echo "- [**OpenWRT 静态 ARM64**](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-linux-arm64-static) ✅" >> $GITHUB_ENV
-          echo "- [macOS amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-macos-amd64)" >> $GITHUB_ENV
-          echo "- [macOS arm64 (Apple Silicon)](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-macos-arm64)" >> $GITHUB_ENV
-          echo "- [Windows amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/CloudflareSpeedTest-windows-amd64.exe)" >> $GITHUB_ENV
+          echo "- [Linux amd64](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_VERSION }}/CloudflareSpeedTest-linux-amd64)" >> $GITHUB_ENV
+          echo "- [Linux arm64 (glibc)](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_VERSION }}/CloudflareSpeedTest-linux-arm64)" >> $GITHUB_ENV
+          echo "- [**OpenWRT 静态 ARM64**](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_VERSION }}/CloudflareSpeedTest-linux-arm64-static) ✅" >> $GITHUB_ENV
+          echo "- [macOS amd64](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_VERSION }}/CloudflareSpeedTest-macos-amd64)" >> $GITHUB_ENV
+          echo "- [macOS arm64 (Apple Silicon)](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_VERSION }}/CloudflareSpeedTest-macos-arm64)" >> $GITHUB_ENV
+          echo "- [Windows amd64](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_VERSION }}/CloudflareSpeedTest-windows-amd64.exe)" >> $GITHUB_ENV
           echo "" >> $GITHUB_ENV
           echo "### 📌 使用说明" >> $GITHUB_ENV
           echo "1. 下载对应平台的文件" >> $GITHUB_ENV
           echo "2. Linux/macOS: 赋予执行权限 \`chmod +x 文件名\`" >> $GITHUB_ENV
           echo "3. 直接运行即可" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
-      - name: 创建 Release
+
+      - name: 创建 GitHub Release（关键修复3）
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref_name }}
-          name: 版本 ${{ github.ref_name }}
+          # 用确定好的版本号作为标签和名称
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: 版本 ${{ env.RELEASE_VERSION }}
           body: ${{ env.RELEASE_NOTES }}
+          # 确保产物路径正确（关键：避免因路径错误导致无产物）
           files: |
             ./release_assets/CloudflareSpeedTest-linux-amd64/CloudflareSpeedTest-linux-amd64
             ./release_assets/CloudflareSpeedTest-linux-arm64/CloudflareSpeedTest-linux-arm64
