@@ -1,5 +1,4 @@
-name: Build All Platforms & Release
-
+name: 多平台自动打包与发布
 on:
   push:
     tags:
@@ -8,189 +7,44 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    name: 构建 ${{ matrix.os }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: write
     strategy:
       matrix:
-        include:
+        os: [ubuntu-latest, windows-latest, macos-13]
+        arch: [amd64, arm64]
+        exclude:
+          # 过滤不支持的组合（如 Windows 无 arm64 官方 runner）
           - os: windows-latest
-            platform: windows
-            arch: amd64
-            ext: .exe
-          - os: ubuntu-latest
-            platform: linux
-            arch: amd64
-            ext: ''
-          - os: ubuntu-latest
-            platform: linux
-            arch: arm64-musl
-            ext: ''
-          - os: ubuntu-latest
-            platform: linux
-            arch: arm64-glibc
-            ext: ''
-          - os: macos-13
-            platform: macos
-            arch: amd64
-            ext: ''
-          - os: macos-14
-            platform: macos
             arch: arm64
-            ext: ''
-      fail-fast: false
-
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 构建 Linux ARM64-musl 版本
-        if: matrix.arch == 'arm64-musl'
-        uses: nick-fields/retry@v2
-        with:
-          timeout_minutes: 25
-          max_attempts: 2
-          command: |
-            docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-            docker pull alpine:3.20
-            docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 --memory 4g --cpus 2 alpine:3.20 sh -c "
-              apk update && apk add --no-cache python3 py3-pip build-base musl-dev zlib zlib-dev openssl openssl-dev libffi libffi-dev file lddtree
-              python3 --version
-              python3 -m venv build_env && source build_env/bin/activate
-              pip install --upgrade pip
-              pip install --no-cache-dir -r requirements.txt pyinstaller certifi urllib3
-              python -m PyInstaller \
-                --onefile \
-                --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} \
-                --clean \
-                --console \
-                --hidden-import requests \
-                --hidden-import urllib3 \
-                --hidden-import certifi \
-                --hidden-import charset_normalizer \
-                --hidden-import idna \
-                --exclude-module tkinter matplotlib numpy pandas PIL cv2 scipy \
-                --strip \
-                --optimize 2 \
-                cloudflare_speedtest.py
-              chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
-              file dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
-              ldd dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} || true
-            "
-
-      - name: 构建 Linux ARM64-glibc 版本
-        if: matrix.arch == 'arm64-glibc'
-        uses: nick-fields/retry@v2
-        with:
-          timeout_minutes: 25
-          max_attempts: 2
-          command: |
-            docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-            docker pull arm64v8/ubuntu:22.04
-            docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 --memory 4g --cpus 2 arm64v8/ubuntu:22.04 sh -c "
-              apt update && apt install -y python3 python3-pip python3-venv build-essential zlib1g-dev libssl-dev libffi-dev file
-              python3 --version
-              python3 -m venv build_env && source build_env/bin/activate
-              pip install --upgrade pip
-              pip install --no-cache-dir -r requirements.txt pyinstaller certifi urllib3
-              python -m PyInstaller \
-                --onefile \
-                --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} \
-                --clean \
-                --console \
-                --hidden-import requests \
-                --hidden-import urllib3 \
-                --hidden-import certifi \
-                --hidden-import charset_normalizer \
-                --hidden-import idna \
-                --exclude-module tkinter matplotlib numpy pandas PIL cv2 scipy \
-                --strip \
-                --optimize 2 \
-                cloudflare_speedtest.py
-              chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
-              file dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
-              ldd dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} || true
-            "
-
-      - name: 设置 Python 环境（非 ARM64）
-        if: matrix.arch != 'arm64-musl' && matrix.arch != 'arm64-glibc'
+      - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      - name: 安装依赖（非 ARM64）
-        if: matrix.arch != 'arm64-musl' && matrix.arch != 'arm64-glibc'
+      - name: 安装依赖与打包工具
         run: |
           python -m pip install --upgrade pip
-          pip install --no-cache-dir -r requirements.txt
-          pip install --no-cache-dir pyinstaller certifi urllib3
+          pip install pyinstaller
+          pip install -r requirements.txt
 
-      - name: 构建 Windows 产物
-        if: matrix.platform == 'windows'
-        run: |
-          echo "import PyInstaller.__main__" > build.py
-          echo "PyInstaller.__main__.run([" >> build.py
-          echo "    '--onefile'," >> build.py
-          echo "    '--name', 'CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}'," >> build.py
-          echo "    '--clean'," >> build.py
-          echo "    '--console'," >> build.py
-          echo "    '--hidden-import', 'requests'," >> build.py
-          echo "    '--hidden-import', 'urllib3'," >> build.py
-          echo "    '--hidden-import', 'certifi'," >> build.py
-          echo "    '--hidden-import', 'charset_normalizer'," >> build.py
-          echo "    '--hidden-import', 'idna'," >> build.py
-          echo "    '--exclude-module', 'tkinter'," >> build.py
-          echo "    '--exclude-module', 'matplotlib'," >> build.py
-          echo "    '--exclude-module', 'numpy'," >> build.py
-          echo "    '--exclude-module', 'pandas'," >> build.py
-          echo "    '--exclude-module', 'PIL'," >> build.py
-          echo "    '--exclude-module', 'cv2'," >> build.py
-          echo "    '--exclude-module', 'scipy'," >> build.py
-          echo "    '--strip'," >> build.py
-          echo "    '--optimize', '2'," >> build.py
-          echo "    'cloudflare_speedtest.py'" >> build.py
-          echo "])" >> build.py
-          python build.py
-
-      - name: 构建 Linux/macOS 产物（非 ARM64）
-        if: matrix.platform != 'windows' && matrix.arch != 'arm64-musl' && matrix.arch != 'arm64-glibc'
-        run: |
-          python -m PyInstaller \
-            --onefile \
-            --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} \
-            --clean \
-            --console \
-            --hidden-import requests \
-            --hidden-import urllib3 \
-            --hidden-import certifi \
-            --hidden-import charset_normalizer \
-            --hidden-import idna \
-            --exclude-module tkinter matplotlib numpy pandas PIL cv2 scipy \
-            --strip \
-            --optimize 2 \
-            cloudflare_speedtest.py
-          chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
+      - name: 执行本地打包脚本
+        run: python build.py  # 你的自动打包脚本文件名
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}
-          retention-days: 15
+          name: CloudflareSpeedTest-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
 
   release:
-    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-    permissions:
-      contents: write
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: 下载所有产物
         uses: actions/download-artifact@v4
@@ -205,70 +59,10 @@ jobs:
             echo "VERSION=nightly-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
           fi
 
-      - name: 创建 GitHub Release
+      - name: 创建 Release
         uses: softprops/action-gh-release@v1
         with:
-          name: Release ${{ env.VERSION }}
+          name: 版本 ${{ env.VERSION }}
           tag_name: ${{ env.VERSION }}
-          files: |
-            artifacts/CloudflareSpeedTest-windows-amd64/CloudflareSpeedTest-windows-amd64.exe
-            artifacts/CloudflareSpeedTest-linux-amd64/CloudflareSpeedTest-linux-amd64
-            artifacts/CloudflareSpeedTest-linux-arm64-musl/CloudflareSpeedTest-linux-arm64-musl
-            artifacts/CloudflareSpeedTest-linux-arm64-glibc/CloudflareSpeedTest-linux-arm64-glibc
-            artifacts/CloudflareSpeedTest-macos-amd64/CloudflareSpeedTest-macos-amd64
-            artifacts/CloudflareSpeedTest-macos-arm64/CloudflareSpeedTest-macos-arm64
-          draft: false
-          prerelease: false
+          files: artifacts/**/*
           generate_release_notes: true
-          body: |
-            ## 🚀 Cloudflare SpeedTest ${{ env.VERSION }} 发布
-            
-            ### 📦 下载链接
-            - **Windows (x64)**：CloudflareSpeedTest-windows-amd64.exe
-            - **Linux (x64, glibc)**：CloudflareSpeedTest-linux-amd64
-            - **Linux (ARM64, musl)**：CloudflareSpeedTest-linux-arm64-musl
-              - ✅ 兼容：OpenWRT、旧版 Termux（musl 环境）
-            - **Linux (ARM64, glibc)**：CloudflareSpeedTest-linux-arm64-glibc
-              - ✅ 兼容：新版 Termux（glibc 环境）、Ubuntu ARM64、Debian ARM64
-            - **macOS (Intel)**：CloudflareSpeedTest-macos-amd64
-            - **macOS (Apple Silicon)**：CloudflareSpeedTest-macos-arm64
-            
-            ### 📱 Termux 使用说明
-            1. **判断 Termux 版本**：
-               ```bash
-               ls /data/data/com.termux/files/usr/lib/ld-*.so*
-               ```
-               - 输出 `ld-musl-aarch64.so.1` → 旧版，下载 **arm64-musl** 版本
-               - 输出 `ld-linux-aarch64.so.1` → 新版，下载 **arm64-glibc** 版本
-
-            2. **新版 Termux（glibc）操作**：
-               ```bash
-               wget https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-linux-arm64-glibc
-               pkg install zlib1g
-               chmod +x CloudflareSpeedTest-linux-arm64-glibc
-               ./CloudflareSpeedTest-linux-arm64-glibc
-               ```
-
-            3. **旧版 Termux（musl）操作**：
-               ```bash
-               wget https://github.com/你的用户名/你的仓库/releases/download/${{ env.VERSION }}/CloudflareSpeedTest-linux-arm64-musl
-               pkg install zlib
-               chmod +x CloudflareSpeedTest-linux-arm64-musl
-               ./CloudflareSpeedTest-linux-arm64-musl
-               ```
-            
-            ### 🌟 核心功能
-            - 🎯 内置 97 个全球 Cloudflare 数据中心机场码
-            - 🌍 支持城市名称智能识别（如输入"香港"自动匹配）
-            - ⚙️ 3 种预设测试模式：快速/标准/高质量
-            - 🔧 完全自定义测试参数（线程数、超时等）
-            - 📊 自动生成 CSV 测试报告（result.csv）
-            - 🆕 小白模式：只需输入 3 个数字即可快速测速
-            
-            ### 🚀 通用使用方法
-            ```bash
-            # Linux/macOS 用户
-            chmod +x 下载的文件名
-            ./下载的文件名
-            ```
-            Windows 用户直接双击运行即可。
