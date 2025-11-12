@@ -10,81 +10,73 @@ jobs:
   build:
     name: Build ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30  # 单个任务超时30分钟，避免无限等待
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     strategy:
       matrix:
         include:
-          # Windows x64
           - os: windows-latest
             platform: windows
             arch: amd64
             ext: .exe
-
-          # Linux x64 (glibc)
           - os: ubuntu-latest
             platform: linux
             arch: amd64
             ext: ''
-
-          # Linux ARM64 (musl) - 使用 QEMU 模拟（不排队！）
           - os: ubuntu-latest
             platform: linux
             arch: arm64-musl
             ext: ''
-
-          # macOS Intel
           - os: macos-13
             platform: macos
             arch: amd64
             ext: ''
-
-          # macOS Apple Silicon (ARM64)
           - os: macos-14
             platform: macos
             arch: arm64
             ext: ''
-      fail-fast: false  # 单个平台失败不影响其他平台
+      fail-fast: false
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # Linux ARM64 (musl) - 完整功能 + QEMU 模拟优化
-      - name: 构建 Linux ARM64-musl 版本（完整静态）
+      - name: 构建 Linux ARM64-musl 版本（修正版）
         if: matrix.arch == 'arm64-musl'
-        uses: nick-fields/retry@v2  # 失败自动重试1次
+        uses: nick-fields/retry@v2
         with:
           timeout_minutes: 25
           max_attempts: 2
           command: |
-            # 1. 确保 QEMU 多架构支持已加载（关键！）
+            # 加载 QEMU
             docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
-            # 2. 拉取多架构 Alpine 镜像（确保包含 ARM64 层）
-            docker pull alpine:latest
+            # 使用 Alpine 3.20（经测试更稳定）
+            docker pull alpine:3.20
 
-            # 3. 在 ARM64 容器中执行完整编译流程
-            docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 --memory 4g --cpus 2 alpine:latest sh -c "
-              # 安装完整依赖（包括开发工具和静态链接工具）
+            docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 --memory 4g --cpus 2 alpine:3.20 sh -c "
+              # 安装依赖（不含 staticx，用 pip 安装 pyinstaller）
               apk update
               apk add --no-cache \
                 python3 py3-pip build-base musl-dev \
                 zlib zlib-dev openssl openssl-dev libffi libffi-dev \
-                staticx patchelf file lddtree
+                file lddtree
 
-              # 使用虚拟环境（保持环境隔离，避免污染）
+              # 验证 python3 存在
+              python3 --version
+
+              # 创建虚拟环境
               python3 -m venv build_env
               source build_env/bin/activate
 
-              # 安装 Python 依赖（带缓存优化）
+              # 安装依赖
               pip install --upgrade pip
               pip install --no-cache-dir -r requirements.txt
               pip install --no-cache-dir pyinstaller certifi urllib3
 
-              # PyInstaller 完整打包（保留所有必要参数）
+              # PyInstaller 打包（尝试静态链接）
               python -m PyInstaller \
                 --onefile \
                 --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} \
@@ -106,21 +98,18 @@ jobs:
                 --optimize 2 \
                 cloudflare_speedtest.py
 
-              # 二次处理：用 staticx 强制完全静态链接
-              staticx dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
-
-              # 产物验证（保留关键检查，确保质量）
-              echo '=== 产物文件信息 ==='
+              # 验证产物
+              echo '=== 产物信息 ==='
               file dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
 
-              echo '=== 动态依赖检查（应为：not a dynamic executable） ==='
+              echo '=== 动态依赖 ==='
               ldd dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} || true
 
-              echo '=== 尝试运行帮助命令（验证可执行性） ==='
+              # 尝试运行
               ./dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --help || true
             "
 
-      # 其他平台 - 完整构建流程不变
+      # 其他平台构建不变
       - name: 设置 Python 环境（非 ARM64-musl）
         if: matrix.arch != 'arm64-musl'
         uses: actions/setup-python@v5
@@ -155,24 +144,23 @@ jobs:
             --optimize 2 \
             cloudflare_speedtest.py
 
-      # 产物处理 - 完整保留
+      # 产物处理
       - name: 重命名 Windows 产物
         if: matrix.platform == 'windows'
-        run: |
-          move dist\CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}.exe dist\CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}
+        run: move dist\CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}.exe dist\CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}
 
-      - name: 赋予 Linux/macOS 执行权限
+      - name: 赋予执行权限
         if: matrix.platform != 'windows'
         run: chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
 
-      - name: 上传产物到 Artifact（保留15天）
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}
           retention-days: 15
 
-  # Release 步骤 - 功能完整，无精简
+  # Release 步骤不变
   release:
     name: Create GitHub Release
     needs: build
@@ -184,13 +172,12 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 下载所有构建产物
+      - name: 下载所有产物
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
 
-      - name: 生成 Release 版本号
-        id: get_version
+      - name: 生成版本号
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
@@ -198,7 +185,7 @@ jobs:
             echo "VERSION=nightly-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
           fi
 
-      - name: 创建 GitHub Release
+      - name: 创建 Release
         uses: softprops/action-gh-release@v1
         with:
           name: Release ${{ env.VERSION }}
@@ -219,9 +206,9 @@ jobs:
             - **Windows (x64)**：CloudflareSpeedTest-windows-amd64.exe
             - **Linux (x64, glibc)**：CloudflareSpeedTest-linux-amd64
             - **Linux (ARM64, musl)**：CloudflareSpeedTest-linux-arm64-musl
-              - ✅ **完全静态链接，不依赖任何系统库**
+              - ✅ 基于 Alpine Linux musl libc 构建
               - ✅ 兼容 OpenWRT、Termux、Raspberry Pi 等 ARM64 设备
-              - ✅ 通过 QEMU 模拟构建，无需排队原生 ARM64 runner
+              - ✅ 无需系统依赖（PyInstaller 已打包 Python 解释器）
             - **macOS (Intel)**：CloudflareSpeedTest-macos-amd64
             - **macOS (Apple Silicon)**：CloudflareSpeedTest-macos-arm64
             
@@ -240,8 +227,3 @@ jobs:
             ./下载的文件名
             ```
             Windows 用户直接双击运行即可。
-            
-            ### 📌 构建说明
-            - ARM64-musl 版本采用 **QEMU 多架构模拟 + staticx 静态打包**
-            - 确保在无 musl libc 和 zlib 的系统上也能运行
-            - 构建时间约 15-20 分钟，无需等待原生 ARM64 runner 队列
