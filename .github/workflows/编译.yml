@@ -10,8 +10,6 @@ jobs:
   build:
     name: Build ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
-    # 关键：不指定容器，在宿主环境中通过 QEMU + 多架构镜像编译 ARM64
-    container: ${{ matrix.container }}
     permissions:
       contents: read
       packages: write
@@ -24,75 +22,56 @@ jobs:
             platform: windows
             arch: amd64
             ext: .exe
-            container: ''
 
           # Linux x64 (glibc)
           - os: ubuntu-latest
             platform: linux
             arch: amd64
             ext: ''
-            container: ''
 
-          # Linux ARM64 (musl) - 使用多架构 Alpine 镜像 + QEMU
-          - os: ubuntu-latest
+          # Linux ARM64 (musl) - 使用原生 ARM64 运行器！
+          - os: ubuntu-latest-arm64  # 关键：使用 ARM64 服务器
             platform: linux
             arch: arm64-musl
             ext: ''
-            container: ''  # 不在顶层指定容器，在步骤中手动启动 ARM64 容器
 
           # macOS Intel
           - os: macos-13
             platform: macos
             arch: amd64
             ext: ''
-            container: ''
 
-          # macOS Apple Silicon
+          # macOS Apple Silicon (ARM64)
           - os: macos-14
             platform: macos
             arch: arm64
             ext: ''
-            container: ''
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # Linux ARM64 (musl) 专属：通过 QEMU 启动 ARM64 Alpine 容器编译
-      - name: 构建 Linux ARM64-musl 版本（多架构兼容）
+      # Linux ARM64 (musl) - 在原生 ARM64 运行器上用 Alpine 容器编译
+      - name: 构建 Linux ARM64-musl 版本（原生 ARM64）
         if: matrix.arch == 'arm64-musl'
         run: |
-          # 1. 安装 QEMU 和多架构支持（GitHub Actions Ubuntu 宿主已预装）
-          # 2. 拉取支持多架构的 Alpine 镜像（官方 alpine:latest 支持 x86_64/arm64）
-          docker pull alpine:latest
-
-          # 3. 在 ARM64 容器中执行编译脚本（通过 --platform 指定架构）
-          docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 alpine:latest sh -c "
-            # 安装系统依赖
+          # 在 ARM64 运行器上启动 Alpine 容器（原生执行，无模拟）
+          docker run --rm -v ${{ github.workspace }}:/app -w /app alpine:latest sh -c "
             apk update
             apk add --no-cache python3 py3-pip build-base libffi-dev openssl-dev
 
-            # 创建虚拟环境
             python3 -m venv build_env
             source build_env/bin/activate
 
-            # 安装 Python 依赖
             pip install --upgrade pip
             pip install -r requirements.txt
             pip install pyinstaller certifi urllib3
 
-            # 构建可执行文件
             python -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
 
-            # 赋予执行权限
             chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
-
-            # 验证产物架构
             file dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
           "
-
-          # 4. （可选）查看产物
-          ls -l dist/
 
       # 非 ARM64-musl 环境构建
       - name: 设置 Python 环境（非 ARM64-musl）
@@ -175,7 +154,7 @@ jobs:
             - **Windows (x64)**：CloudflareSpeedTest-windows-amd64.exe
             - **Linux (x64, glibc)**：CloudflareSpeedTest-linux-amd64
             - **Linux (ARM64, musl)**：CloudflareSpeedTest-linux-arm64-musl
-              - ✅ **真正 ARM64 架构，兼容 OpenWRT、Termux、Raspberry Pi**
+              - ✅ **原生 ARM64 编译，兼容 OpenWRT、Termux、Raspberry Pi**
               - ✅ 完全静态链接，无需任何依赖！
             - **macOS (Intel)**：CloudflareSpeedTest-macos-amd64
             - **macOS (Apple Silicon)**：CloudflareSpeedTest-macos-arm64
