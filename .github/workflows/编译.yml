@@ -41,19 +41,37 @@ jobs:
         if: matrix.arch != 'arm64'
         run: python build.py
 
-      - name: 构建 Linux ARM64 版本（最终修复版）
+      - name: 构建 Linux ARM64 版本（换源 + 强制安装）
         if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
         uses: nick-fields/retry@v2
         with:
           timeout_minutes: 25
           max_attempts: 2
           command: |
+            # 加载 QEMU 多架构支持
             docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+            # 关键修复：替换国内 ARM64 镜像源（阿里云），避免同步失败
             docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 ${{ matrix.docker_image }} bash -c "
-              apt update && apt install -y python3 python3-pip python3-venv build-essential zlib1g-dev libssl-dev libffi-dev
+              # 备份原 sources.list 并替换为阿里云 ARM64 源
+              cp /etc/apt/sources.list /etc/apt/sources.list.bak
+              echo 'deb http://mirrors.aliyun.com/ubuntu-ports/ jammy main restricted universe multiverse' > /etc/apt/sources.list
+              echo 'deb http://mirrors.aliyun.com/ubuntu-ports/ jammy-updates main restricted universe multiverse' >> /etc/apt/sources.list
+              echo 'deb http://mirrors.aliyun.com/ubuntu-ports/ jammy-backports main restricted universe multiverse' >> /etc/apt/sources.list
+              echo 'deb http://mirrors.aliyun.com/ubuntu-ports/ jammy-security main restricted universe multiverse' >> /etc/apt/sources.list
+              
+              # 强制更新并安装依赖（--fix-missing 忽略缺失包）
+              apt update --fix-missing
+              apt install -y --no-install-recommends python3 python3-pip python3-venv build-essential zlib1g-dev libssl-dev libffi-dev
+              
+              # 验证 Python 可用
               python3 --version
+              pip3 --version
+              
+              # 用 pip3 升级 pip，避免版本问题
+              python3 -m pip install --upgrade pip
+              
+              # 创建虚拟环境并打包
               python3 -m venv build_env && source build_env/bin/activate
-              pip install --upgrade pip
               pip install --no-cache-dir -r requirements.txt pyinstaller certifi urllib3
               python3 -m PyInstaller \
                 --onefile \
@@ -68,7 +86,7 @@ jobs:
                 --exclude-module tkinter matplotlib numpy pandas PIL cv2 scipy \
                 --strip \
                 --optimize 2 \
-                /app/cloudflare_speedtest.py  # 显式绝对路径
+                /app/cloudflare_speedtest.py
               deactivate
               chmod +x dist/CloudflareSpeedTest-linux-arm64
             "
