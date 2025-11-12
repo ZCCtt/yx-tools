@@ -41,20 +41,18 @@ jobs:
         if: matrix.arch != 'arm64'
         run: python build.py
 
-      - name: 构建 Linux ARM64 版本（修复 Python 命令 + 虚拟环境）
+      - name: 构建 Linux ARM64 版本（最终修复版）
         if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
         uses: nick-fields/retry@v2
         with:
           timeout_minutes: 25
           max_attempts: 2
           command: |
-            # 加载 QEMU 多架构支持
             docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-            # 关键修复：使用 python3 命令，激活虚拟环境避免权限警告
-            docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 ${{ matrix.docker_image }} sh -c "
+            docker run --rm -v ${{ github.workspace }}:/app -w /app --platform linux/arm64 ${{ matrix.docker_image }} bash -c "
               apt update && apt install -y python3 python3-pip python3-venv build-essential zlib1g-dev libssl-dev libffi-dev
-              python3 --version  # 验证 Python3 可用
-              python3 -m venv build_env && source build_env/bin/activate  # 激活虚拟环境（解决权限警告）
+              python3 --version
+              python3 -m venv build_env && source build_env/bin/activate
               pip install --upgrade pip
               pip install --no-cache-dir -r requirements.txt pyinstaller certifi urllib3
               python3 -m PyInstaller \
@@ -70,8 +68,8 @@ jobs:
                 --exclude-module tkinter matplotlib numpy pandas PIL cv2 scipy \
                 --strip \
                 --optimize 2 \
-                cloudflare_speedtest.py
-              deactivate  # 退出虚拟环境
+                /app/cloudflare_speedtest.py  # 显式绝对路径
+              deactivate
               chmod +x dist/CloudflareSpeedTest-linux-arm64
             "
 
