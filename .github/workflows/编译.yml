@@ -1,10 +1,10 @@
-name: Build All Platforms
+name: Build All Platforms & Release
 
 on:
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - 'v*'  # 保留：推送 v1.0.0 等 tag 自动触发
+  workflow_dispatch:  # 支持：手动触发（可在 GitHub 页面点击运行）
 
 jobs:
   build:
@@ -18,30 +18,35 @@ jobs:
     strategy:
       matrix:
         include:
+          # Windows x64
           - os: windows-latest
             platform: windows
             arch: amd64
             ext: .exe
             container: ''
 
+          # Linux x64 (glibc)
           - os: ubuntu-latest
             platform: linux
             arch: amd64
             ext: ''
             container: ''
 
+          # Linux ARM64 (musl，兼容 OpenWRT/Termux)
           - os: ubuntu-latest
             platform: linux
             arch: arm64-musl
             ext: ''
             container: alpine:latest
 
+          # macOS Intel
           - os: macos-13
             platform: macos
             arch: amd64
             ext: ''
             container: ''
 
+          # macOS Apple Silicon
           - os: macos-14
             platform: macos
             arch: arm64
@@ -52,28 +57,30 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 在 Alpine 中使用虚拟环境构建（musl 版本）
+      # Alpine 专属：虚拟环境编译（避开系统 Python 保护）
+      - name: 安装 Alpine 依赖并构建（musl 版本）
         if: matrix.arch == 'arm64-musl'
         run: |
-          # 1. 安装系统依赖（Python、编译工具等）
+          # 安装系统基础依赖
           apk update
           apk add --no-cache python3 py3-pip build-base libffi-dev openssl-dev
 
-          # 2. 创建并激活虚拟环境（关键：避开系统 Python 保护）
+          # 创建并激活虚拟环境
           python3 -m venv build_env
           source build_env/bin/activate
 
-          # 3. 在虚拟环境中安装依赖和 PyInstaller
+          # 安装项目依赖和 PyInstaller
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller certifi urllib3
 
-          # 4. 构建可执行文件（必须在虚拟环境中运行）
+          # 编译可执行文件
           python -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
 
-          # 5. （可选）退出虚拟环境
+          # 退出虚拟环境（可选）
           deactivate
 
+      # 非 Alpine 环境：常规构建
       - name: 设置 Python 环境（非 Alpine）
         if: matrix.arch != 'arm64-musl'
         uses: actions/setup-python@v5
@@ -89,6 +96,7 @@ jobs:
 
           python -m PyInstaller --onefile --name CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }} --clean --console --hidden-import requests --hidden-import urllib3 --hidden-import certifi --hidden-import charset_normalizer --hidden-import idna --exclude-module tkinter --exclude-module matplotlib --exclude-module numpy --exclude-module pandas --exclude-module PIL --exclude-module cv2 --exclude-module scipy --strip --optimize 2 cloudflare_speedtest.py
 
+      # 产物处理
       - name: 重命名 Windows 产物
         if: matrix.platform == 'windows'
         run: |
@@ -98,7 +106,7 @@ jobs:
         if: matrix.platform != 'windows'
         run: chmod +x dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}
 
-      - name: 验证 Linux ARM64-musl 产物（确保静态链接）
+      - name: 验证 Linux ARM64-musl 产物
         if: matrix.arch == 'arm64-musl'
         run: |
           file dist/CloudflareSpeedTest-linux-arm64-musl
@@ -110,14 +118,16 @@ jobs:
           path: dist/CloudflareSpeedTest-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}
           retention-days: 30
 
+  # Release 步骤：支持手动触发 + tag 自动触发
   release:
     name: Create GitHub Release
-    needs: build
+    needs: build  # 依赖 build 任务成功完成
     runs-on: ubuntu-latest
-    # 修改 release 步骤的 if 条件，同时支持 tag 推送和手动触发
-     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-permissions:
-      contents: write
+    # 关键：同时支持 tag 推送（refs/tags/开头）和手动触发（workflow_dispatch）
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write  # 必需：创建 Release 需要写权限
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -125,32 +135,54 @@ permissions:
       - name: 下载所有构建产物
         uses: actions/download-artifact@v4
         with:
-          path: ./artifacts
+          path: ./artifacts  # 产物统一下载到 artifacts/ 目录
 
-      - name: 创建 Release 并上传产物
+      - name: 显示下载的产物列表（调试用）
+        run: ls -R ./artifacts
+
+      - name: 生成 Release 版本号（兼容手动/自动触发）
+        id: get_version
+        run: |
+          # 若为 tag 触发，直接用 tag 作为版本号（如 v1.0.0）
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+          else
+            # 若为手动触发，用当前时间生成临时版本号（如 20251112-123456）
+            echo "VERSION=nightly-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+          fi
+
+      - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v1
         with:
+          # Release 标题（自动触发用 tag 名，手动触发用临时版本号）
+          name: Release ${{ env.VERSION }}
+          # Release 标签（自动触发用 tag，手动触发用临时标签）
+          tag_name: ${{ env.VERSION }}
+          # 上传所有平台产物
           files: |
             artifacts/CloudflareSpeedTest-windows-amd64/CloudflareSpeedTest-windows-amd64.exe
             artifacts/CloudflareSpeedTest-linux-amd64/CloudflareSpeedTest-linux-amd64
             artifacts/CloudflareSpeedTest-linux-arm64-musl/CloudflareSpeedTest-linux-arm64-musl
             artifacts/CloudflareSpeedTest-macos-amd64/CloudflareSpeedTest-macos-amd64
             artifacts/CloudflareSpeedTest-macos-arm64/CloudflareSpeedTest-macos-arm64
+          # 非草稿、非预发布
           draft: false
           prerelease: false
+          # 自动生成 Release Notes（基于 commit 历史）
           generate_release_notes: true
+          # 自定义 Release 正文
           body: |
-            ## 🚀 Cloudflare SpeedTest 跨平台版本发布
-
+            ## 🚀 Cloudflare SpeedTest ${{ env.VERSION }} 发布
+            
             ### 📦 下载链接
             - **Windows (x64)**：CloudflareSpeedTest-windows-amd64.exe
             - **Linux (x64, glibc)**：CloudflareSpeedTest-linux-amd64
             - **Linux (ARM64, musl)**：CloudflareSpeedTest-linux-arm64-musl
               - ✅ **兼容 OpenWRT、Termux、Alpine Linux**
-              - ✅ 完全静态链接，无需任何依赖！
+              - ✅ 完全静态链接，无需额外依赖！
             - **macOS (Intel)**：CloudflareSpeedTest-macos-amd64
             - **macOS (Apple Silicon)**：CloudflareSpeedTest-macos-arm64
-
+            
             ### 🌟 核心功能
             - 🎯 内置 97 个全球 Cloudflare 数据中心机场码
             - 🌍 支持城市名称智能识别（如输入"香港"自动匹配）
@@ -158,11 +190,13 @@ permissions:
             - 🔧 完全自定义测试参数（线程数、超时等）
             - 📊 自动生成 CSV 测试报告（result.csv）
             - 🆕 小白模式：只需输入 3 个数字即可快速测速
-
+            
             ### 🚀 使用方法
             ```bash
-            # Linux/macOS
-            chmod +x 文件名
-            ./文件名
+            # Linux/macOS 用户
+            chmod +x 下载的文件名
+            ./下载的文件名
             ```
             Windows 用户直接双击运行即可。
+            
+            > 💡 提示：若为手动触发的 nightly 版本，仅用于测试，建议正式发布时使用 `v*` tag 推送。
